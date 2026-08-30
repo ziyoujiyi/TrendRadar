@@ -9,38 +9,38 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from trendradar.utils.time import (
-    DEFAULT_TIMEZONE,
-    get_configured_time,
-    format_date_folder,
-    format_time_filename,
-    get_current_time_display,
-    convert_time_for_display,
-    format_iso_time_friendly,
-    is_within_days,
-)
+from trendradar.ai import AITranslator
+from trendradar.ai.filter import AIFilter, AIFilterResult
 from trendradar.core import (
+    Scheduler,
+    count_word_frequency,
+    detect_latest_new_titles,
     load_frequency_words,
     matches_word_groups,
     read_all_today_titles,
-    detect_latest_new_titles,
-    count_word_frequency,
-    Scheduler,
-)
-from trendradar.report import (
-    prepare_report_data,
-    generate_html_report,
-    render_html_content,
 )
 from trendradar.notification import (
-    render_feishu_content,
-    render_dingtalk_content,
-    split_content_into_batches,
     NotificationDispatcher,
+    render_dingtalk_content,
+    render_feishu_content,
+    split_content_into_batches,
 )
-from trendradar.ai import AITranslator
-from trendradar.ai.filter import AIFilter, AIFilterResult
+from trendradar.report import (
+    generate_html_report,
+    prepare_report_data,
+    render_html_content,
+)
 from trendradar.storage import get_storage_manager
+from trendradar.utils.time import (
+    DEFAULT_TIMEZONE,
+    convert_time_for_display,
+    format_date_folder,
+    format_iso_time_friendly,
+    format_time_filename,
+    get_configured_time,
+    get_current_time_display,
+    is_within_days,
+)
 
 
 class AppContext:
@@ -189,7 +189,7 @@ class AppContext:
 
             self._storage_manager = get_storage_manager(
                 backend_type=storage_config.get("BACKEND", "auto"),
-                data_dir=local_config.get("DATA_DIR", "output"),
+                data_dir=local_config.get("DATASTORE_DIR", "output"),
                 enable_txt=storage_config.get("FORMATS", {}).get("TXT", True),
                 enable_html=storage_config.get("FORMATS", {}).get("HTML", True),
                 remote_config={
@@ -219,13 +219,17 @@ class AppContext:
         self, platform_ids: Optional[List[str]] = None, quiet: bool = False
     ) -> Tuple[Dict, Dict, Dict]:
         """读取当天所有标题"""
-        return read_all_today_titles(self.get_storage_manager(), platform_ids, quiet=quiet)
+        return read_all_today_titles(
+            self.get_storage_manager(), platform_ids, quiet=quiet
+        )
 
     def detect_new_titles(
         self, platform_ids: Optional[List[str]] = None, quiet: bool = False
     ) -> Dict:
         """检测最新批次的新增标题"""
-        return detect_latest_new_titles(self.get_storage_manager(), platform_ids, quiet=quiet)
+        return detect_latest_new_titles(
+            self.get_storage_manager(), platform_ids, quiet=quiet
+        )
 
     def is_first_crawl(self) -> bool:
         """检测是否是当天第一次爬取"""
@@ -334,7 +338,14 @@ class AppContext:
             output_dir="output",
             date_folder=self.format_date(),
             time_filename=self.format_time(),
-            render_html_func=lambda *args, **kwargs: self.render_html(*args, rss_items=rss_items, rss_new_items=rss_new_items, ai_analysis=ai_analysis, standalone_data=standalone_data, **kwargs),
+            render_html_func=lambda *args, **kwargs: self.render_html(
+                *args,
+                rss_items=rss_items,
+                rss_new_items=rss_new_items,
+                ai_analysis=ai_analysis,
+                standalone_data=standalone_data,
+                **kwargs,
+            ),
             matches_word_groups_func=self.matches_word_groups,
             load_frequency_words_func=lambda: self.load_frequency_words(frequency_file),
         )
@@ -499,7 +510,9 @@ class AppContext:
     # === AI 智能筛选 ===
 
     @staticmethod
-    def _with_ordered_priorities(tags: List[Dict], start_priority: int = 1) -> List[Dict]:
+    def _with_ordered_priorities(
+        tags: List[Dict], start_priority: int = 1
+    ) -> List[Dict]:
         """按当前列表顺序补齐优先级（值越小优先级越高）"""
         normalized: List[Dict] = []
         priority = start_priority
@@ -516,7 +529,9 @@ class AppContext:
             priority += 1
         return normalized
 
-    def run_ai_filter(self, interests_file: Optional[str] = None) -> Optional[AIFilterResult]:
+    def run_ai_filter(
+        self, interests_file: Optional[str] = None
+    ) -> Optional[AIFilterResult]:
         """
         执行 AI 智能筛选完整流程
 
@@ -550,12 +565,20 @@ class AppContext:
 
         if debug:
             print(f"[AI筛选][DEBUG] === 配置信息 ===")
-            print(f"[AI筛选][DEBUG] 存储后端: {self.get_storage_manager().backend_name}")
-            print(f"[AI筛选][DEBUG] batch_size={filter_config.get('BATCH_SIZE', 200)}, "
-                  f"batch_interval={filter_config.get('BATCH_INTERVAL', 5)}")
+            print(
+                f"[AI筛选][DEBUG] 存储后端: {self.get_storage_manager().backend_name}"
+            )
+            print(
+                f"[AI筛选][DEBUG] batch_size={filter_config.get('BATCH_SIZE', 200)}, "
+                f"batch_interval={filter_config.get('BATCH_INTERVAL', 5)}"
+            )
             print(f"[AI筛选][DEBUG] interests_file={effective_interests_file}")
-            print(f"[AI筛选][DEBUG] prompt_file={filter_config.get('PROMPT_FILE', 'prompt.txt')}")
-            print(f"[AI筛选][DEBUG] extract_prompt_file={filter_config.get('EXTRACT_PROMPT_FILE', 'extract_prompt.txt')}")
+            print(
+                f"[AI筛选][DEBUG] prompt_file={filter_config.get('PROMPT_FILE', 'prompt.txt')}"
+            )
+            print(
+                f"[AI筛选][DEBUG] extract_prompt_file={filter_config.get('EXTRACT_PROMPT_FILE', 'extract_prompt.txt')}"
+            )
 
         # 1. 读取兴趣描述
         # 传 configured_interests（可能为 None）给 load_interests_content，
@@ -564,22 +587,30 @@ class AppContext:
         if not interests_content:
             return AIFilterResult(success=False, error="兴趣描述文件为空或不存在")
 
-        current_hash = ai_filter.compute_interests_hash(interests_content, effective_interests_file)
+        current_hash = ai_filter.compute_interests_hash(
+            interests_content, effective_interests_file
+        )
         storage = self.get_storage_manager()
 
         if debug:
             print(f"[AI筛选][DEBUG] 兴趣描述 hash: {current_hash}")
-            print(f"[AI筛选][DEBUG] 兴趣描述内容 ({len(interests_content)} 字符):\n{interests_content}")
+            print(
+                f"[AI筛选][DEBUG] 兴趣描述内容 ({len(interests_content)} 字符):\n{interests_content}"
+            )
 
         # 2. 开启批量模式（远程后端延迟上传，所有写操作完成后统一上传）
         storage.begin_batch()
 
         # 3. 检查提示词是否变更
-        stored_hash = storage.get_latest_prompt_hash(interests_file=effective_interests_file)
+        stored_hash = storage.get_latest_prompt_hash(
+            interests_file=effective_interests_file
+        )
 
         if debug:
             print(f"[AI筛选][DEBUG] 数据库存储 hash: {stored_hash}")
-            print(f"[AI筛选][DEBUG] hash 对比: stored={stored_hash} vs current={current_hash} → {'匹配' if stored_hash == current_hash else '不匹配'}")
+            print(
+                f"[AI筛选][DEBUG] hash 对比: stored={stored_hash} vs current={current_hash} → {'匹配' if stored_hash == current_hash else '不匹配'}"
+            )
 
         if stored_hash != current_hash:
             new_version = storage.get_latest_ai_filter_tag_version() + 1
@@ -593,11 +624,18 @@ class AppContext:
                     storage.end_batch()
                     return AIFilterResult(success=False, error="标签提取失败")
                 tags_data = self._with_ordered_priorities(tags_data, start_priority=1)
-                saved_count = storage.save_ai_filter_tags(tags_data, new_version, current_hash, interests_file=effective_interests_file)
+                saved_count = storage.save_ai_filter_tags(
+                    tags_data,
+                    new_version,
+                    current_hash,
+                    interests_file=effective_interests_file,
+                )
                 print(f"[AI筛选] 已保存 {saved_count} 个标签 (版本 {new_version})")
             else:
                 # 兴趣描述已变更，让 AI 对比旧标签和新兴趣，给出更新方案
-                old_tags = storage.get_active_ai_filter_tags(interests_file=effective_interests_file)
+                old_tags = storage.get_active_ai_filter_tags(
+                    interests_file=effective_interests_file
+                )
                 update_result = ai_filter.update_tags(old_tags, interests_content)
 
                 if update_result is None:
@@ -607,11 +645,22 @@ class AppContext:
                     if not tags_data:
                         storage.end_batch()
                         return AIFilterResult(success=False, error="标签提取失败")
-                    tags_data = self._with_ordered_priorities(tags_data, start_priority=1)
-                    deprecated_count = storage.deprecate_all_ai_filter_tags(interests_file=effective_interests_file)
+                    tags_data = self._with_ordered_priorities(
+                        tags_data, start_priority=1
+                    )
+                    deprecated_count = storage.deprecate_all_ai_filter_tags(
+                        interests_file=effective_interests_file
+                    )
                     storage.clear_analyzed_news(interests_file=effective_interests_file)
-                    saved_count = storage.save_ai_filter_tags(tags_data, new_version, current_hash, interests_file=effective_interests_file)
-                    print(f"[AI筛选] 废弃 {deprecated_count} 个旧标签, 保存 {saved_count} 个新标签 (版本 {new_version})")
+                    saved_count = storage.save_ai_filter_tags(
+                        tags_data,
+                        new_version,
+                        current_hash,
+                        interests_file=effective_interests_file,
+                    )
+                    print(
+                        f"[AI筛选] 废弃 {deprecated_count} 个旧标签, 保存 {saved_count} 个新标签 (版本 {new_version})"
+                    )
                 else:
                     change_ratio = update_result["change_ratio"]
                     keep_tags = update_result["keep"]
@@ -619,64 +668,117 @@ class AppContext:
                     remove_tags = update_result["remove"]
 
                     if debug:
-                        print(f"[AI筛选][DEBUG] AI 标签更新: keep={len(keep_tags)}, add={len(add_tags)}, remove={len(remove_tags)}, change_ratio={change_ratio:.2f}, threshold={threshold:.2f}")
+                        print(
+                            f"[AI筛选][DEBUG] AI 标签更新: keep={len(keep_tags)}, add={len(add_tags)}, remove={len(remove_tags)}, change_ratio={change_ratio:.2f}, threshold={threshold:.2f}"
+                        )
 
                     if change_ratio >= threshold:
                         # 全量重分类：废弃所有旧标签，用 extract_tags 重新提取
-                        print(f"[AI筛选] 兴趣文件变更: {effective_interests_file} (AI change_ratio={change_ratio:.2f} >= threshold={threshold:.2f} → 全量重分类)")
+                        print(
+                            f"[AI筛选] 兴趣文件变更: {effective_interests_file} (AI change_ratio={change_ratio:.2f} >= threshold={threshold:.2f} → 全量重分类)"
+                        )
                         tags_data = ai_filter.extract_tags(interests_content)
                         if not tags_data:
                             storage.end_batch()
                             return AIFilterResult(success=False, error="标签提取失败")
-                        tags_data = self._with_ordered_priorities(tags_data, start_priority=1)
-                        deprecated_count = storage.deprecate_all_ai_filter_tags(interests_file=effective_interests_file)
-                        storage.clear_analyzed_news(interests_file=effective_interests_file)
-                        saved_count = storage.save_ai_filter_tags(tags_data, new_version, current_hash, interests_file=effective_interests_file)
-                        print(f"[AI筛选] 废弃 {deprecated_count} 个旧标签, 保存 {saved_count} 个新标签 (版本 {new_version})")
+                        tags_data = self._with_ordered_priorities(
+                            tags_data, start_priority=1
+                        )
+                        deprecated_count = storage.deprecate_all_ai_filter_tags(
+                            interests_file=effective_interests_file
+                        )
+                        storage.clear_analyzed_news(
+                            interests_file=effective_interests_file
+                        )
+                        saved_count = storage.save_ai_filter_tags(
+                            tags_data,
+                            new_version,
+                            current_hash,
+                            interests_file=effective_interests_file,
+                        )
+                        print(
+                            f"[AI筛选] 废弃 {deprecated_count} 个旧标签, 保存 {saved_count} 个新标签 (版本 {new_version})"
+                        )
                     else:
                         # 增量更新：按 AI 指示操作
-                        print(f"[AI筛选] 兴趣文件变更: {effective_interests_file} (AI change_ratio={change_ratio:.2f} < threshold={threshold:.2f} → 增量更新)")
-                        print(f"[AI筛选]   保留 {len(keep_tags)} 个标签, 新增 {len(add_tags)} 个, 废弃 {len(remove_tags)} 个")
+                        print(
+                            f"[AI筛选] 兴趣文件变更: {effective_interests_file} (AI change_ratio={change_ratio:.2f} < threshold={threshold:.2f} → 增量更新)"
+                        )
+                        print(
+                            f"[AI筛选]   保留 {len(keep_tags)} 个标签, 新增 {len(add_tags)} 个, 废弃 {len(remove_tags)} 个"
+                        )
 
                         # 废弃 AI 标记移除的标签
                         if remove_tags:
                             remove_set = set(remove_tags)
-                            removed_ids = [t["id"] for t in old_tags if t["tag"] in remove_set]
+                            removed_ids = [
+                                t["id"] for t in old_tags if t["tag"] in remove_set
+                            ]
                             if removed_ids:
                                 storage.deprecate_specific_ai_filter_tags(removed_ids)
                                 if debug:
-                                    print(f"[AI筛选][DEBUG] 废弃标签 IDs: {removed_ids}")
+                                    print(
+                                        f"[AI筛选][DEBUG] 废弃标签 IDs: {removed_ids}"
+                                    )
 
                         # 更新保留标签的描述
                         keep_with_priority = []
                         if keep_tags:
-                            storage.update_ai_filter_tag_descriptions(keep_tags, interests_file=effective_interests_file)
-                            keep_with_priority = self._with_ordered_priorities(keep_tags, start_priority=1)
-                            storage.update_ai_filter_tag_priorities(keep_with_priority, interests_file=effective_interests_file)
+                            storage.update_ai_filter_tag_descriptions(
+                                keep_tags, interests_file=effective_interests_file
+                            )
+                            keep_with_priority = self._with_ordered_priorities(
+                                keep_tags, start_priority=1
+                            )
+                            storage.update_ai_filter_tag_priorities(
+                                keep_with_priority,
+                                interests_file=effective_interests_file,
+                            )
 
                         # 保存新增标签
                         if add_tags:
-                            add_start = keep_with_priority[-1]["priority"] + 1 if keep_with_priority else 1
-                            add_with_priority = self._with_ordered_priorities(add_tags, start_priority=add_start)
-                            saved_count = storage.save_ai_filter_tags(add_with_priority, new_version, current_hash, interests_file=effective_interests_file)
+                            add_start = (
+                                keep_with_priority[-1]["priority"] + 1
+                                if keep_with_priority
+                                else 1
+                            )
+                            add_with_priority = self._with_ordered_priorities(
+                                add_tags, start_priority=add_start
+                            )
+                            saved_count = storage.save_ai_filter_tags(
+                                add_with_priority,
+                                new_version,
+                                current_hash,
+                                interests_file=effective_interests_file,
+                            )
                             if debug:
                                 print(f"[AI筛选][DEBUG] 新增保存 {saved_count} 个标签")
 
                         # 更新保留标签的 hash（标记为已处理）
-                        storage.update_ai_filter_tags_hash(effective_interests_file, current_hash)
+                        storage.update_ai_filter_tags_hash(
+                            effective_interests_file, current_hash
+                        )
 
                         # 增量更新：清除不匹配新闻的分析记录，让它们有机会被新标签集重新分析
                         if add_tags:
-                            cleared = storage.clear_unmatched_analyzed_news(interests_file=effective_interests_file)
+                            cleared = storage.clear_unmatched_analyzed_news(
+                                interests_file=effective_interests_file
+                            )
                             if cleared > 0:
-                                print(f"[AI筛选]   清除 {cleared} 条不匹配记录，将在新标签下重新分析")
+                                print(
+                                    f"[AI筛选]   清除 {cleared} 条不匹配记录，将在新标签下重新分析"
+                                )
 
         # 3. 获取当前 active 标签
-        active_tags = storage.get_active_ai_filter_tags(interests_file=effective_interests_file)
+        active_tags = storage.get_active_ai_filter_tags(
+            interests_file=effective_interests_file
+        )
         if debug:
             print(f"[AI筛选][DEBUG] 从数据库获取 active 标签: {len(active_tags)} 个")
             for t in active_tags:
-                print(f"[AI筛选][DEBUG]   id={t['id']} tag={t['tag']} priority={t.get('priority', 9999)} version={t.get('version')} hash={t.get('prompt_hash', '')[:8]}...")
+                print(
+                    f"[AI筛选][DEBUG]   id={t['id']} tag={t['tag']} priority={t.get('priority', 9999)} version={t.get('version')} hash={t.get('prompt_hash', '')[:8]}..."
+                )
 
         if not active_tags:
             storage.end_batch()
@@ -687,7 +789,9 @@ class AppContext:
         # 4. 收集待分类新闻
         # 热榜
         all_news = storage.get_all_news_ids()
-        analyzed_hotlist = storage.get_analyzed_news_ids("hotlist", interests_file=effective_interests_file)
+        analyzed_hotlist = storage.get_analyzed_news_ids(
+            "hotlist", interests_file=effective_interests_file
+        )
         pending_news = [n for n in all_news if n["id"] not in analyzed_hotlist]
 
         # RSS（先做新鲜度过滤，再去除已分类的）
@@ -725,20 +829,30 @@ class AppContext:
                         continue
                 fresh_rss.append(n)
 
-            analyzed_rss = storage.get_analyzed_news_ids("rss", interests_file=effective_interests_file)
+            analyzed_rss = storage.get_analyzed_news_ids(
+                "rss", interests_file=effective_interests_file
+            )
             pending_rss = [n for n in fresh_rss if n["id"] not in analyzed_rss]
 
         # 始终打印总量/已分析/待分析 的详细数据
         hotlist_total = len(all_news)
         hotlist_skipped = len(analyzed_hotlist)
         hotlist_pending = len(pending_news)
-        print(f"[AI筛选] 热榜: 总计 {hotlist_total} 条, 已分析跳过 {hotlist_skipped} 条, 本次发送AI分析 {hotlist_pending} 条")
+        print(
+            f"[AI筛选] 热榜: 总计 {hotlist_total} 条, 已分析跳过 {hotlist_skipped} 条, 本次发送AI分析 {hotlist_pending} 条"
+        )
         if self.rss_enabled:
             rss_total = len(all_rss)
             rss_skipped = len(analyzed_rss)
             rss_pending = len(pending_rss)
-            freshness_info = f", 新鲜度过滤 {freshness_filtered_rss} 条" if freshness_filtered_rss > 0 else ""
-            print(f"[AI筛选] RSS: 总计 {rss_total} 条{freshness_info}, 已分析跳过 {rss_skipped} 条, 本次发送AI分析 {rss_pending} 条")
+            freshness_info = (
+                f", 新鲜度过滤 {freshness_filtered_rss} 条"
+                if freshness_filtered_rss > 0
+                else ""
+            )
+            print(
+                f"[AI筛选] RSS: 总计 {rss_total} 条{freshness_info}, 已分析跳过 {rss_skipped} 条, 本次发送AI分析 {rss_pending} 条"
+            )
 
         total_pending = len(pending_news) + len(pending_rss)
         if total_pending == 0:
@@ -754,73 +868,97 @@ class AppContext:
         for i in range(0, len(pending_news), batch_size):
             if batch_count > 0 and batch_interval > 0:
                 import time
+
                 print(f"[AI筛选] 批次间隔等待 {batch_interval} 秒...")
                 time.sleep(batch_interval)
-            batch = pending_news[i:i + batch_size]
+            batch = pending_news[i : i + batch_size]
             titles_for_ai = [
                 {"id": n["id"], "title": n["title"], "source": n.get("source_name", "")}
                 for n in batch
             ]
-            batch_results = ai_filter.classify_batch(titles_for_ai, active_tags, interests_content)
+            batch_results = ai_filter.classify_batch(
+                titles_for_ai, active_tags, interests_content
+            )
             for r in batch_results:
                 r["source_type"] = "hotlist"
             total_results.extend(batch_results)
             batch_count += 1
-            print(f"[AI筛选] 热榜批次 {i // batch_size + 1}: {len(batch)} 条 → {len(batch_results)} 条匹配")
+            print(
+                f"[AI筛选] 热榜批次 {i // batch_size + 1}: {len(batch)} 条 → {len(batch_results)} 条匹配"
+            )
 
         # 处理 RSS
         for i in range(0, len(pending_rss), batch_size):
             if batch_count > 0 and batch_interval > 0:
                 import time
+
                 print(f"[AI筛选] 批次间隔等待 {batch_interval} 秒...")
                 time.sleep(batch_interval)
-            batch = pending_rss[i:i + batch_size]
+            batch = pending_rss[i : i + batch_size]
             titles_for_ai = [
                 {"id": n["id"], "title": n["title"], "source": n.get("source_name", "")}
                 for n in batch
             ]
-            batch_results = ai_filter.classify_batch(titles_for_ai, active_tags, interests_content)
+            batch_results = ai_filter.classify_batch(
+                titles_for_ai, active_tags, interests_content
+            )
             for r in batch_results:
                 r["source_type"] = "rss"
             total_results.extend(batch_results)
             batch_count += 1
-            print(f"[AI筛选] RSS 批次 {i // batch_size + 1}: {len(batch)} 条 → {len(batch_results)} 条匹配")
+            print(
+                f"[AI筛选] RSS 批次 {i // batch_size + 1}: {len(batch)} 条 → {len(batch_results)} 条匹配"
+            )
 
         # 6. 保存结果
         if total_results:
             saved = storage.save_ai_filter_results(total_results)
             print(f"[AI筛选] 保存 {saved} 条分类结果")
             if debug and saved != len(total_results):
-                print(f"[AI筛选][DEBUG] !! 保存数量不一致: 期望 {len(total_results)}, 实际 {saved}（可能有重复记录被跳过）")
+                print(
+                    f"[AI筛选][DEBUG] !! 保存数量不一致: 期望 {len(total_results)}, 实际 {saved}（可能有重复记录被跳过）"
+                )
 
         # 6.5 记录所有已分析的新闻（匹配+不匹配，用于去重）
-        matched_hotlist_ids = {r["news_item_id"] for r in total_results if r.get("source_type") == "hotlist"}
-        matched_rss_ids = {r["news_item_id"] for r in total_results if r.get("source_type") == "rss"}
+        matched_hotlist_ids = {
+            r["news_item_id"]
+            for r in total_results
+            if r.get("source_type") == "hotlist"
+        }
+        matched_rss_ids = {
+            r["news_item_id"] for r in total_results if r.get("source_type") == "rss"
+        }
 
         if pending_news:
             hotlist_ids = [n["id"] for n in pending_news]
             storage.save_analyzed_news(
-                hotlist_ids, "hotlist", effective_interests_file,
-                current_hash, matched_hotlist_ids
+                hotlist_ids,
+                "hotlist",
+                effective_interests_file,
+                current_hash,
+                matched_hotlist_ids,
             )
 
         if pending_rss:
             rss_ids = [n["id"] for n in pending_rss]
             storage.save_analyzed_news(
-                rss_ids, "rss", effective_interests_file,
-                current_hash, matched_rss_ids
+                rss_ids, "rss", effective_interests_file, current_hash, matched_rss_ids
             )
 
         if pending_news or pending_rss:
             total_analyzed = len(pending_news) + len(pending_rss)
             total_matched = len(matched_hotlist_ids) + len(matched_rss_ids)
-            print(f"[AI筛选] 已记录 {total_analyzed} 条新闻分析状态 (匹配 {total_matched}, 不匹配 {total_analyzed - total_matched})")
+            print(
+                f"[AI筛选] 已记录 {total_analyzed} 条新闻分析状态 (匹配 {total_matched}, 不匹配 {total_analyzed - total_matched})"
+            )
 
         # 7. 结束批量模式（统一上传数据库到远程存储）
         storage.end_batch()
 
         # 8. 查询并组装返回结果
-        all_results = storage.get_active_ai_filter_results(interests_file=effective_interests_file)
+        all_results = storage.get_active_ai_filter_results(
+            interests_file=effective_interests_file
+        )
 
         if debug:
             print(f"[AI筛选][DEBUG] === 最终汇总 ===")
@@ -862,7 +1000,9 @@ class AppContext:
         for r in raw_results:
             tag_name = r["tag"]
             if tag_name not in tag_groups:
-                raw_priority = r.get("tag_priority", tag_priority_map.get(tag_name, 9999))
+                raw_priority = r.get(
+                    "tag_priority", tag_priority_map.get(tag_name, 9999)
+                )
                 try:
                     tag_position = int(raw_priority)
                 except (TypeError, ValueError):
@@ -881,20 +1021,22 @@ class AppContext:
                 continue
             seen_titles[tag_name].add(title)
 
-            tag_groups[tag_name]["items"].append({
-                "title": title,
-                "source_id": r.get("source_id", ""),
-                "source_name": r.get("source_name", ""),
-                "url": r.get("url", ""),
-                "mobile_url": r.get("mobile_url", ""),
-                "rank": r.get("rank", 0),
-                "ranks": r.get("ranks", []),
-                "first_time": r.get("first_time", ""),
-                "last_time": r.get("last_time", ""),
-                "count": r.get("count", 1),
-                "relevance_score": r.get("relevance_score", 0),
-                "source_type": r.get("source_type", "hotlist"),
-            })
+            tag_groups[tag_name]["items"].append(
+                {
+                    "title": title,
+                    "source_id": r.get("source_id", ""),
+                    "source_name": r.get("source_name", ""),
+                    "url": r.get("url", ""),
+                    "mobile_url": r.get("mobile_url", ""),
+                    "rank": r.get("rank", 0),
+                    "ranks": r.get("ranks", []),
+                    "first_time": r.get("first_time", ""),
+                    "last_time": r.get("last_time", ""),
+                    "count": r.get("count", 1),
+                    "relevance_score": r.get("relevance_score", 0),
+                    "source_type": r.get("source_type", "hotlist"),
+                }
+            )
             tag_groups[tag_name]["count"] += 1
 
         # 根据配置排序：位置优先 / 数量优先
@@ -956,7 +1098,9 @@ class AppContext:
                 for item in tag_data.get("items", []):
                     if item.get("source_type", "hotlist") == "hotlist":
                         last_time = item.get("last_time", "")
-                        if last_time and (latest_time is None or last_time > latest_time):
+                        if last_time and (
+                            latest_time is None or last_time > latest_time
+                        ):
                             latest_time = last_time
             if latest_time:
                 print(f"[AI筛选] current 模式：最新时间 {latest_time}，过滤已下榜新闻")
@@ -1011,12 +1155,16 @@ class AppContext:
                     if freshness_enabled and first_time:
                         feed_id = item.get("source_id", "")
                         max_days = feed_max_age_map.get(feed_id, default_max_age_days)
-                        if max_days > 0 and not is_within_days(first_time, max_days, timezone):
+                        if max_days > 0 and not is_within_days(
+                            first_time, max_days, timezone
+                        ):
                             continue
 
                     # RSS 条目：first_time 是 ISO 格式，用友好格式显示
                     if first_time:
-                        time_display = format_iso_time_friendly(first_time, timezone, include_date=True)
+                        time_display = format_iso_time_friendly(
+                            first_time, timezone, include_date=True
+                        )
                     else:
                         time_display = ""
                 else:
@@ -1065,26 +1213,32 @@ class AppContext:
             if hotlist_titles:
                 if max_news > 0:
                     hotlist_titles = hotlist_titles[:max_news]
-                hotlist_stats.append({
-                    "word": tag_name,
-                    "count": len(hotlist_titles),
-                    "position": tag_data.get("position", 9999),
-                    "titles": hotlist_titles,
-                })
+                hotlist_stats.append(
+                    {
+                        "word": tag_name,
+                        "count": len(hotlist_titles),
+                        "position": tag_data.get("position", 9999),
+                        "titles": hotlist_titles,
+                    }
+                )
 
             if rss_titles:
                 if max_news > 0:
                     rss_titles = rss_titles[:max_news]
-                rss_stats.append({
-                    "word": tag_name,
-                    "count": len(rss_titles),
-                    "position": tag_data.get("position", 9999),
-                    "titles": rss_titles,
-                })
+                rss_stats.append(
+                    {
+                        "word": tag_name,
+                        "count": len(rss_titles),
+                        "position": tag_data.get("position", 9999),
+                        "titles": rss_titles,
+                    }
+                )
 
         if mode == "current" and filtered_count > 0:
             total_kept = sum(s["count"] for s in hotlist_stats)
-            print(f"[AI筛选] current 模式：过滤 {filtered_count} 条已下榜新闻，保留 {total_kept} 条当前在榜")
+            print(
+                f"[AI筛选] current 模式：过滤 {filtered_count} 条已下榜新闻，保留 {total_kept} 条当前在榜"
+            )
 
         if min_score > 0:
             hotlist_kept = sum(s["count"] for s in hotlist_stats)
@@ -1093,15 +1247,25 @@ class AppContext:
             parts = [f"热榜 {hotlist_kept} 条"]
             if rss_kept > 0:
                 parts.append(f"RSS {rss_kept} 条")
-            print(f"[AI筛选] 分数过滤：min_score={min_score}，保留 {total_kept} 条 score≥{min_score} ({', '.join(parts)})")
+            print(
+                f"[AI筛选] 分数过滤：min_score={min_score}，保留 {total_kept} 条 score≥{min_score} ({', '.join(parts)})"
+            )
 
         priority_sort_enabled = self.ai_priority_sort_enabled
         if priority_sort_enabled:
-            hotlist_stats.sort(key=lambda x: (x.get("position", 9999), -x["count"], x["word"]))
-            rss_stats.sort(key=lambda x: (x.get("position", 9999), -x["count"], x["word"]))
+            hotlist_stats.sort(
+                key=lambda x: (x.get("position", 9999), -x["count"], x["word"])
+            )
+            rss_stats.sort(
+                key=lambda x: (x.get("position", 9999), -x["count"], x["word"])
+            )
         else:
-            hotlist_stats.sort(key=lambda x: (-x["count"], x.get("position", 9999), x["word"]))
-            rss_stats.sort(key=lambda x: (-x["count"], x.get("position", 9999), x["word"]))
+            hotlist_stats.sort(
+                key=lambda x: (-x["count"], x.get("position", 9999), x["word"])
+            )
+            rss_stats.sort(
+                key=lambda x: (-x["count"], x.get("position", 9999), x["word"])
+            )
 
         return hotlist_stats, rss_stats
 
